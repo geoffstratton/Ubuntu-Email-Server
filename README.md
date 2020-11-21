@@ -2,6 +2,8 @@
 
 How to build an Ubuntu Email Server with Postfix, Dovecot, and MySQL.
 
+### Update November 2020: Update November 2020: If you're on Ubuntu 20.04, these instructions still mostly work as written. There is one update of note, though, related to Dovecot and SSL. This is indicated below for Dovecot's 10-ssl.conf file.
+
 ### Update November 2016: If you're on Ubuntu 16.04, these instructions will mostly work as written. However, there are a [few minor changes](Ubuntu1604.md) that you might want to review before you get started.
 
 This article details how to set up your own Ubuntu mail server using Postfix and Dovecot with virtual users and domains. I started this project on Ubuntu 12.04 LTS but the procedures apply to later versions as well. After this we'll add a webmail client (I'd suggest [Roundcube](https://github.com/geoffstratton/RoundCube-on-Ubuntu-16-with-Nginx-and-PHP-FPM), although you can use SquirrelMail) and an anti-spam solution ([SpamAssassin](https://github.com/geoffstratton/SpamAssassin-on-Ubuntu)). These articles are also available in my Github. 
@@ -397,6 +399,18 @@ ssl_cert = </etc/ssl/certs/dovecot.pem
 ssl_key = </etc/ssl/private/dovecot.key
 ## Force clients to use SSL
 ssl = required
+```
+
+**Note for Ubuntu 20.04:** With this LTS release, the included OpenSSL version requires at least 2048-bit Diffie-Hellman parameters. Create a dh.pem file and then reference it from Dovecot's 10-ssl.conf file:
+
+```shell
+$ openssl dhparam -out /etc/dovecot/private/dh.pem 2048
+```
+
+```ini
+ssl_cert = </etc/ssl/certs/dovecot.pem
+ssl_key = </etc/ssl/private/dovecot.key
+ssl_dh = </etc/dovecot/private/dh.pem
 ```
 
 Restart Dovecot:

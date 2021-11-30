@@ -36,7 +36,28 @@ Now when you log in via your email client, or send an email message, you'll noti
 
 ## The Dovecot Certificate
 
-On Ubuntu 12.04, installing Dovecot using the Aptitude package manager gave you a free key and certificate that you could reference from Postfix. It seems that this freebie certificate is no longer included, so you'll need to provide a key-cert pair yourself. Assuming you don't want to buy a certificate, you can simply create a self-signed certificate:
+On Ubuntu 12.04, installing Dovecot using the Aptitude package manager gave you a free key and certificate that you could reference from Postfix. It seems that this freebie certificate is no longer included, so you'll need to provide a key-cert pair yourself. Assuming you don't want to buy a certificate, you can simply use Let's Encrypt, or create a self-signed certificate:
+
+### Let's Encrypt
+
+First, obviously you should have Certbot [set up on your server](https://www.geoffstratton.com/free-ssl-certificates-lets-encrypt-ubuntu-16).
+ 
+Then, create some certs for your mail domains (this assumes you're running Nginx as your web server):
+
+```
+root@ubuntu:/# certbot certonly --nginx -d mail.domain1.com -d mail.domain2.com
+```
+
+Finally, you want to ensure that Postfix and Dovecot get restarted when the certs are auto-renewed. Edit /etc/letsencrypt/renewal-hooks/mail.domain1.com, comment out the Nginx line, and add your mail services:
+
+```
+# renew_hook = systemctl restart nginx
+renew_hook = systemctl restart postfix dovecot
+```
+
+If you want to test your renewal hooks, you can do `certbot renew --dry-run`.
+
+### Self-Signed
 
 ```shell	
 root@ubuntu# openssl req -x509 -newkey rsa:4096 -keyout dovecot.key -out dovecot.pem -days 365 -nodes

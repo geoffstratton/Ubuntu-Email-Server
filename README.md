@@ -2,13 +2,15 @@
 
 How to build an Ubuntu Email Server with Postfix, Dovecot, and MySQL.
 
-**Update November 2020:** If you're on Ubuntu 20.04, these instructions still mostly work as written. There is one update of note, though, related to Dovecot and SSL. This is indicated below for Dovecot's 10-ssl.conf file.
+**Update November 2021:** Added instructions for using Dovecot and Postfix with Let's Encrypt. Also adjusted Postfix config to block auth attempts over port 25. This setup will get you 90%+ on mail server security tests.
+
+**Update November 2020:** If you're on Ubuntu 20.04, these instructions still mostly work as written. There is one update of note, though, related to Dovecot and SSL (assuming you're not using Let's Encrypt). This is indicated below for Dovecot's 10-ssl.conf file.
 
 **Update November 2016:** If you're on Ubuntu 16.04, these instructions will mostly work as written. However, there are a [few minor changes](Ubuntu1604.md) that you might want to review before you get started.
 
-This article details how to set up your own Ubuntu mail server using Postfix and Dovecot with virtual users and domains. I started this project on Ubuntu 12.04 LTS but the procedures apply to later versions as well. After this we'll add a webmail client (I'd suggest [Roundcube](https://github.com/geoffstratton/RoundCube-on-Ubuntu-16-with-Nginx-and-PHP-FPM), although you can use SquirrelMail) and an anti-spam solution ([SpamAssassin](https://github.com/geoffstratton/SpamAssassin-on-Ubuntu)). Finally we'll set up [SPF, DKIM, and DMARC](https://github.com/geoffstratton/spf-dkim-dmarc-ubuntu) for email validation. These articles are also available in my Github. 
+This article details how to set up your own Ubuntu mail server using Postfix and Dovecot with virtual users and domains. I started this project on Ubuntu 12.04 LTS but the procedures apply to later versions as well (just substitute "systemctl" for "service" where appropriate). After this we'll add a webmail client (I'd suggest [Roundcube](https://github.com/geoffstratton/RoundCube-on-Ubuntu-16-with-Nginx-and-PHP-FPM), although you can use SquirrelMail) and an anti-spam solution ([SpamAssassin](https://github.com/geoffstratton/SpamAssassin-on-Ubuntu)). Finally we'll set up [SPF, DKIM, and DMARC](https://github.com/geoffstratton/spf-dkim-dmarc-ubuntu) for email validation. These articles are also available in my Github. 
 
-This assumes you have MySQL running and understand how to configure any local firewalls (probably with ufw if you're running a firewall on your Ubuntu server). It also assumes you have your domains forwarding to your server and that your /etc/hostname file is set to mydomain<span></span>.com.
+This assumes you have MySQL running and understand how to configure any local firewalls (probably with ufw on Ubuntu server). It also assumes you have your domains forwarding to your server and that your /etc/hostname file is set to mydomain<span></span>.com.
 
 ## The Ubuntu Mail Server Install
 
@@ -89,6 +91,24 @@ mysql> INSERT INTO `mailserver`.`virtual_aliases`
 ```
 
 ## The Postfix Mail-Transfer Agent
+### Optional: Use the Let's Encrypt Certbot to create some email certificates.
+
+First, obviously you should have Certbot [set up on your server](https://www.geoffstratton.com/free-ssl-certificates-lets-encrypt-ubuntu-16).
+ 
+Then, create some certs for your mail domains (this assumes you're running Nginx as your web server):
+
+```
+root@ubuntu:/# certbot certonly --nginx -d mail.domain1.com -d mail.domain2.com
+```
+
+Finally, you want to ensure that Postfix and Dovecot get restarted when the certs are auto-renewed. Edit /etc/letsencrypt/renewal-hooks/mail.domain1.com, comment out the Nginx line, and add your mail services:
+
+```
+# renew_hook = systemctl restart nginx
+renew_hook = systemctl restart postfix dovecot
+```
+
+If you want to test your renewal hooks, you can do `certbot renew --dry-run`.
 
 ### Step 3: Set up Postfix to handle incoming email.
 
@@ -124,6 +144,9 @@ readme_directory = no
 #smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
 #smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
 
+## For Let's Encrypt, your certs will be in /etc/letsencrypt/live/mail.domain1.com
+# smtpd_tls_cert_file=/etc/letsencrypt/live/mail.domain1.com/fullchain.pem
+# smtpd_tls_key_file=/etc/letsencrypt/live/mail.domain1.com/privkey.pem
 smtpd_tls_cert_file=/etc/ssl/certs/dovecot.pem
 smtpd_tls_key_file=/etc/ssl/private/dovecot.key
 smtpd_use_tls = yes
@@ -224,15 +247,20 @@ $ postmap -q myalias@mydomain.com mysql:/etc/postfix/mysql-virtual-alias-maps.cf
 
 If the first two postmap commands return anything but 1, and the third one returns anything but the destination email address, there's a problem -- most likely bad credentials or queries in the three mysql-virtual files.
 
-Note: You should ensure that port TCP/25 is open on your firewall so your server can receive email from the wider internet. You might also want to open the submission port TCP/587 for users to connect securely with email clients. If so, modify your /etc/postfix/master.cf file by uncommenting these lines:
-	
-```ini
+In /etc/postfix/master.cf, the "smtp inet n" line is the SMTP service used for communicating with the wider internet (typically port TCP/25). "smtps inet n" is SMTP over SSL (typically 465/TCP) and "submission inet n" is SMTP over TLS (TCP/587). I'd suggest only allowing authentication over TLS:
+
+```
+smtp      inet  n       -       y       -       -       smtpd
+  -o smtpd_sasl_auth_enable=no
+ 
 submission inet n       -       -       -       -       smtpd
   -o syslog_name=postfix/submission
   -o smtpd_tls_security_level=encrypt
   -o smtpd_sasl_auth_enable=yes
   -o smtpd_client_restrictions=permit_sasl_authenticated,reject
 ```
+
+Your firewall will of course need to permit traffic to these ports.
 
 ## The Dovecot Mail-Delivery Agent
 
@@ -394,14 +422,17 @@ service auth-worker {
 Edit /etc/dovecot/conf.d/10-ssl.conf:
 	
 ```ini
-## If you have your own SSL cert and key, specify them here. We're using the free ones that come with Dovecot.
+## If you have your own SSL cert and key, specify them here. You can use the free ones that come with Dovecot, or Let's Encrypt:
+# ssl_cert = </etc/letsencrypt/live/mail.domain1.com/fullchain.pem
+# ssl_key = </etc/letsencrypt/live/mail.domain1.com/privkey.pem
+# ssl_dh = </etc/letsencrypt/ssl-dhparams.pem
 ssl_cert = </etc/ssl/certs/dovecot.pem
 ssl_key = </etc/ssl/private/dovecot.key
 ## Force clients to use SSL
 ssl = required
 ```
 
-**Note for Ubuntu 20.04:** With this LTS release, the included OpenSSL version requires at least 2048-bit Diffie-Hellman parameters. Create a dh.pem file and then reference it from Dovecot's 10-ssl.conf file:
+**Note for Ubuntu 20.04:** With this LTS release, the included OpenSSL version requires at least 2048-bit Diffie-Hellman parameters. If you aren't using the Let's Encrypt dhparams file as above, create a dh.pem file and then reference it from Dovecot's 10-ssl.conf file:
 
 ```shell
 $ openssl dhparam -out /etc/dovecot/private/dh.pem 2048
